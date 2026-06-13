@@ -128,7 +128,7 @@ video.write_videofile(
     codec="libx264",
     audio_codec="aac",
     preset="medium",
-    ffmpeg_params=["-crf", "20", "-pix_fmt", "yuv420p"],
+    ffmpeg_params=["-crf", "20", "-pix_fmt", "yuv420p", "-profile:v", "baseline", "-level", "3.1", "-movflags", "+faststart"],
     logger="bar",
 )
 print(f"\n完成: {OUTPUT}")
