@@ -26,8 +26,8 @@ captions = [
     "",  # 最後：テロップなし
 ]
 
-# 最後の画像を繰り返す（8シーン目）
-images_seq = images + [images[-1]]
+# 最後の画像を7C1A4282.JPGに変更（8シーン目）
+images_seq = images + ["7C1A4282.JPG"]
 dur_per = [3.5, 3.5, 4.0, 4.5, 4.5, 5.0, 4.0, 4.0]
 
 def crop_and_resize(img_path, w, h):
