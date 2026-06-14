@@ -1,20 +1,19 @@
-from moviepy import ImageClip, VideoClip, CompositeVideoClip, concatenate_videoclips, AudioFileClip
-from moviepy.video.fx import CrossFadeIn, CrossFadeOut
-from moviepy.audio.fx import AudioFadeOut
-from PIL import Image, ImageDraw, ImageFont
+import subprocess, os, shutil, tempfile
 import numpy as np
-import os
+from PIL import Image, ImageDraw, ImageFont
 
-# Instagramリール/ストーリーズ 9:16
+FFMPEG = "/usr/local/lib/python3.11/dist-packages/imageio_ffmpeg/binaries/ffmpeg-linux-x86_64-v7.0.2"
 W, H = 1080, 1920
+FPS = 30
 FONT_PATH = "/usr/share/fonts/truetype/fonts-japanese-gothic.ttf"
 IMAGE_DIR = "/home/user/kanoyasika/images"
 MUSIC = "/root/.claude/uploads/33d0e5f7-0f54-5025-8014-9de9b9ef7d8c/c39454ae-Soft_Path_through_the_Cedar.mp3"
 OUTPUT = "/home/user/kanoyasika/shikanoya_reel.mp4"
 
-images = sorted([f for f in os.listdir(IMAGE_DIR) if f.endswith(".jpg")])
+images_seq = sorted([f for f in os.listdir(IMAGE_DIR) if f.lower().endswith(".jpg") or f.lower().endswith(".jpeg")])
+# 最後に7C1A4282.JPGをテロップなしで追加
+images_seq = [f for f in images_seq if f != "7C1A4282.JPG"] + ["7C1A4282.JPG"]
 
-# 最後の画像をテロップなしで追加（8シーン目）
 captions = [
     "奈良公園のすぐそばに\n鹿がやってくる宿",
     "ここは「鹿のや」\n鹿と人が共に息づく場所",
@@ -25,110 +24,113 @@ captions = [
     "奈良の自然に\nただいまを言える宿",
     "",  # 最後：テロップなし
 ]
-
-# 最後の画像を7C1A4282.JPGに変更（8シーン目）
-images_seq = images + ["7C1A4282.JPG"]
 dur_per = [3.5, 3.5, 4.0, 4.5, 4.5, 5.0, 4.0, 4.0]
+FADE = 0.5  # クロスフェード秒数
 
-def crop_and_resize(img_path, w, h):
-    img = Image.open(img_path).convert("RGB")
+def crop_resize(path, w, h):
+    img = Image.open(path).convert("RGB")
     iw, ih = img.size
-    scale = max(w / iw, h / ih)
-    nw, nh = int(iw * scale), int(ih * scale)
+    s = max(w/iw, h/ih)
+    nw, nh = int(iw*s), int(ih*s)
     img = img.resize((nw, nh), Image.LANCZOS)
-    left = (nw - w) // 2
-    top = (nh - h) // 2
-    return img.crop((left, top, left + w, top + h))
+    return img.crop(((nw-w)//2, (nh-h)//2, (nw-w)//2+w, (nh-h)//2+h))
 
-def make_caption_frame(text, w, h, font_size=68):
-    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
+def add_caption(base_pil, text, font_size=68):
+    out = base_pil.convert("RGBA")
+    overlay = Image.new("RGBA", out.size, (0,0,0,0))
+    draw = ImageDraw.Draw(overlay)
+    if text:
+        for y in range(H):
+            if y > H*0.55:
+                a = int(175*(y-H*0.55)/(H*0.45))
+                draw.line([(0,y),(W,y)], fill=(0,0,0,min(a,170)))
+        try:
+            font = ImageFont.truetype(FONT_PATH, font_size)
+        except:
+            font = ImageFont.load_default()
+        lines = text.split("\n")
+        lh, lw = [], []
+        td = ImageDraw.Draw(Image.new("RGBA",(1,1)))
+        for ln in lines:
+            bb = td.textbbox((0,0), ln, font=font)
+            lw.append(bb[2]-bb[0]); lh.append(bb[3]-bb[1])
+        th = sum(lh)+(len(lines)-1)*24
+        y0 = H-th-130
+        for i,ln in enumerate(lines):
+            x = (W-lw[i])//2
+            y = y0+sum(lh[:i])+i*24
+            draw.text((x+2,y+2), ln, font=font, fill=(0,0,0,190))
+            draw.text((x,y), ln, font=font, fill=(255,255,255,245))
+    out = Image.alpha_composite(out, overlay)
+    return out.convert("RGB")
 
-    if not text:
-        return np.array(img)
+def zoom_frame(pil, t, dur, s0=1.0, s1=1.08):
+    s = s0 + (s1-s0)*(t/dur)
+    nw, nh = int(W*s), int(H*s)
+    img = pil.resize((nw,nh), Image.LANCZOS)
+    return img.crop(((nw-W)//2,(nh-H)//2,(nw-W)//2+W,(nh-H)//2+H))
 
-    for y in range(h):
-        if y > h * 0.55:
-            alpha = int(185 * (y - h * 0.55) / (h * 0.45))
-            draw.line([(0, y), (w, y)], fill=(0, 0, 0, min(alpha, 175)))
+# フレームをtmpフォルダに書き出す
+tmpdir = tempfile.mkdtemp()
+frame_idx = 0
 
-    try:
-        font = ImageFont.truetype(FONT_PATH, font_size)
-    except:
-        font = ImageFont.load_default()
+for scene_i, fname in enumerate(images_seq):
+    path = os.path.join(IMAGE_DIR, fname)
+    cap = captions[scene_i] if scene_i < len(captions) else ""
+    dur = dur_per[scene_i] if scene_i < len(dur_per) else 4.0
+    nframes = int(dur * FPS)
+    fade_in_frames  = int(FADE * FPS) if scene_i > 0 else 0
+    fade_out_frames = int(FADE * FPS) if scene_i < len(images_seq)-1 else 0
 
-    lines = text.split("\n")
-    line_heights, line_widths = [], []
-    for line in lines:
-        bbox = draw.textbbox((0, 0), line, font=font)
-        line_widths.append(bbox[2] - bbox[0])
-        line_heights.append(bbox[3] - bbox[1])
+    base = crop_resize(path, W, H)
 
-    total_h = sum(line_heights) + (len(lines) - 1) * 24
-    y_start = h - total_h - 130
+    for f in range(nframes):
+        t = f / FPS
+        zoomed = zoom_frame(base, t, dur)
+        frame = add_caption(zoomed, cap)
+        arr = np.array(frame, dtype=np.uint8)
 
-    for i, line in enumerate(lines):
-        x = (w - line_widths[i]) // 2
-        y = y_start + sum(line_heights[:i]) + i * 24
-        draw.text((x + 2, y + 2), line, font=font, fill=(0, 0, 0, 180))
-        draw.text((x, y), line, font=font, fill=(255, 255, 255, 245))
+        # フェードイン
+        if f < fade_in_frames:
+            alpha = f / fade_in_frames
+            arr = (arr * alpha).astype(np.uint8)
+        # フェードアウト
+        if f >= nframes - fade_out_frames:
+            alpha = (nframes - f) / fade_out_frames
+            arr = (arr * alpha).astype(np.uint8)
 
-    return np.array(img)
+        img_out = Image.fromarray(arr)
+        img_out.save(os.path.join(tmpdir, f"frame_{frame_idx:06d}.jpg"), quality=92)
+        frame_idx += 1
 
-def make_zoom_clip(bg_arr, dur, scale_start=1.0, scale_end=1.08):
-    h, w = bg_arr.shape[:2]
-    def zoom_frame(t):
-        s = scale_start + (scale_end - scale_start) * (t / dur)
-        nh, nw = int(h * s), int(w * s)
-        pil = Image.fromarray(bg_arr).resize((nw, nh), Image.LANCZOS)
-        left = (nw - w) // 2
-        top = (nh - h) // 2
-        return np.array(pil.crop((left, top, left + w, top + h)))
-    return VideoClip(zoom_frame, duration=dur)
+total_frames = frame_idx
+print(f"フレーム書き出し完了: {total_frames}フレーム ({total_frames/FPS:.1f}秒)")
 
-clips = []
-for i, fname in enumerate(images_seq):
-    img_path = os.path.join(IMAGE_DIR, fname)
-    cap_text = captions[i] if i < len(captions) else ""
-    dur = dur_per[i] if i < len(dur_per) else 4.0
+# ffmpegで動画+音楽を合成
+cmd = [
+    FFMPEG, "-y",
+    "-framerate", str(FPS),
+    "-i", os.path.join(tmpdir, "frame_%06d.jpg"),
+    "-i", MUSIC,
+    "-c:v", "libx264",
+    "-profile:v", "high",
+    "-level:v", "4.0",
+    "-pix_fmt", "yuv420p",
+    "-crf", "20",
+    "-preset", "medium",
+    "-c:a", "aac",
+    "-b:a", "192k",
+    "-shortest",
+    "-movflags", "+faststart",
+    OUTPUT
+]
+print("ffmpegでエンコード中...")
+result = subprocess.run(cmd, capture_output=True, text=True)
+if result.returncode != 0:
+    print("STDERR:", result.stderr[-2000:])
+else:
+    print(f"\n完成: {OUTPUT}")
+    import os as _os
+    print(f"サイズ: {_os.path.getsize(OUTPUT)//1024//1024}MB")
 
-    bg = np.array(crop_and_resize(img_path, W, H))
-    bg_clip = make_zoom_clip(bg, dur)
-
-    cap_arr = make_caption_frame(cap_text, W, H)
-    cap_clip = ImageClip(cap_arr, duration=dur)
-
-    scene = CompositeVideoClip([bg_clip, cap_clip], size=(W, H))
-    clips.append(scene)
-
-fade = 0.5
-final_clips = []
-for i, c in enumerate(clips):
-    if i == 0:
-        final_clips.append(c.with_effects([CrossFadeOut(fade)]))
-    elif i == len(clips) - 1:
-        final_clips.append(c.with_effects([CrossFadeIn(fade)]))
-    else:
-        final_clips.append(c.with_effects([CrossFadeIn(fade), CrossFadeOut(fade)]))
-
-video = concatenate_videoclips(final_clips, method="compose", padding=-fade)
-video = video.with_fps(30)
-
-# 音楽を動画の長さに合わせてフェードアウト
-audio = AudioFileClip(MUSIC)
-video_dur = video.duration
-if audio.duration > video_dur:
-    audio = audio.subclipped(0, video_dur).with_effects([AudioFadeOut(2.0)])
-video = video.with_audio(audio)
-
-print(f"動画尺: {video_dur:.2f}秒")
-video.write_videofile(
-    OUTPUT,
-    fps=30,
-    codec="libx264",
-    audio_codec="aac",
-    preset="medium",
-    ffmpeg_params=["-crf", "20", "-pix_fmt", "yuv420p", "-profile:v", "baseline", "-level", "3.1", "-movflags", "+faststart"],
-    logger="bar",
-)
-print(f"\n完成: {OUTPUT}")
+shutil.rmtree(tmpdir)
