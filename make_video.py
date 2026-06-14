@@ -27,9 +27,17 @@ captions = [
 dur_per = [3.5, 3.5, 4.0, 4.5, 4.5, 5.0, 4.0, 4.0]
 FADE = 0.5  # クロスフェード秒数
 
-def crop_resize(path, w, h):
+def crop_resize(path, w, h, letterbox=False):
     img = Image.open(path).convert("RGB")
     iw, ih = img.size
+    if letterbox:
+        # 画像全体を収める（上下または左右に黒帯）
+        s = min(w/iw, h/ih)
+        nw, nh = int(iw*s), int(ih*s)
+        img = img.resize((nw, nh), Image.LANCZOS)
+        out = Image.new("RGB", (w, h), (0, 0, 0))
+        out.paste(img, ((w-nw)//2, (h-nh)//2))
+        return out
     s = max(w/iw, h/ih)
     nw, nh = int(iw*s), int(ih*s)
     img = img.resize((nw, nh), Image.LANCZOS)
@@ -82,11 +90,12 @@ for scene_i, fname in enumerate(images_seq):
     fade_in_frames  = int(FADE * FPS) if scene_i > 0 else 0
     fade_out_frames = int(FADE * FPS) if scene_i < len(images_seq)-1 else 0
 
-    base = crop_resize(path, W, H)
+    is_last = (scene_i == len(images_seq) - 1)
+    base = crop_resize(path, W, H, letterbox=is_last)
 
     for f in range(nframes):
         t = f / FPS
-        zoomed = zoom_frame(base, t, dur)
+        zoomed = base if is_last else zoom_frame(base, t, dur)
         frame = add_caption(zoomed, cap)
         arr = np.array(frame, dtype=np.uint8)
 
