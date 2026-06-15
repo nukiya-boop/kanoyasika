@@ -20,7 +20,7 @@ captions = [
     "窓の外に\n当たり前のように鹿がいる",
     "自然と溶け合う\nひとときを",
     "奈良・自然との共存",
-    "— 鹿のや —\nNARA KANOYA",
+    "— 鹿のや —\nNARA KASUGA KANOYA",
     "奈良の自然に\nただいまを言える宿",
     "",  # 最後：テロップなし
 ]
@@ -90,7 +90,7 @@ for scene_i, fname in enumerate(images_seq):
     fade_in_frames  = int(FADE * FPS) if scene_i > 0 else 0
     fade_out_frames = int(FADE * FPS) if scene_i < len(images_seq)-1 else 0
 
-    is_letterbox = (scene_i == len(images_seq) - 1) or (scene_i == 1)
+    is_letterbox = (scene_i == len(images_seq) - 1) or (scene_i == 1) or (scene_i == 6)
     base = crop_resize(path, W, H, letterbox=is_letterbox)
 
     for f in range(nframes):
