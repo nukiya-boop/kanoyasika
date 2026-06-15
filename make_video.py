@@ -90,12 +90,12 @@ for scene_i, fname in enumerate(images_seq):
     fade_in_frames  = int(FADE * FPS) if scene_i > 0 else 0
     fade_out_frames = int(FADE * FPS) if scene_i < len(images_seq)-1 else 0
 
-    is_last = (scene_i == len(images_seq) - 1)
-    base = crop_resize(path, W, H, letterbox=is_last)
+    is_letterbox = (scene_i == len(images_seq) - 1) or (scene_i == 1)
+    base = crop_resize(path, W, H, letterbox=is_letterbox)
 
     for f in range(nframes):
         t = f / FPS
-        zoomed = base if is_last else zoom_frame(base, t, dur)
+        zoomed = base if is_letterbox else zoom_frame(base, t, dur)
         frame = add_caption(zoomed, cap)
         arr = np.array(frame, dtype=np.uint8)
 
